@@ -1,0 +1,6 @@
+
+* Get current JOINERS
+
+MATCH (i:Idty) -[s:STATE {to:9223372036854775807}]-> (:JOINER)
+WITH apoc.date.format(s.from,'s') as Date, i.uid as Pseudo
+RETURN Pseudo, Date

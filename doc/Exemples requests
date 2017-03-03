@@ -1,0 +1,14 @@
+
+* Get current Members
+
+MATCH (i:Idty) -[s:STATE {to:9223372036854775807}]-> (:JOINER)
+WITH apoc.date.format(s.from,'s') as Date, i.uid as Pseudo
+RETURN Pseudo, Date
+
+* Get members at a certain date 
+
+WITH apoc.date.parse('2017/02/10 00-00-00','s', 'yyyy/MM/dd HH-mm-ss') as date
+MATCH (i:Idty) -[s:STATE]-> (:JOINER)
+WHERE s.from < date AND s.to > date
+WITH apoc.date.format(s.from, 's') as joining_date, i
+RETURN i.uid, joining_date
