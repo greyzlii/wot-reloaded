@@ -31,7 +31,7 @@ function Neo4jService(duniterServer, neo4jHost, neo4jPort) {
 
                 // Check the last block number in the database
                 const max = (yield duniterServer.dal.bindexDAL.query('SELECT MAX(number) FROM block WHERE fork = 0'))[0]['MAX(number)'];
-                //const max = 936;
+                //const max = 10;
 
                 if (!lastBlock.records[0]) {
                     // If it's the first run, there's no block
@@ -109,7 +109,7 @@ function Neo4jService(duniterServer, neo4jHost, neo4jPort) {
                 }
 
             // Read blocks to import
-            const blocks = (yield duniterServer.dal.bindexDAL.query("SELECT number, hash, previousHash, medianTime, joiners, excluded, certifications\n\
+            const blocks = (yield duniterServer.dal.bindexDAL.query("SELECT number, hash, membersCount, previousHash, medianTime, joiners, excluded, certifications\n\
                                                                                 FROM block\n\
                                                                                 WHERE fork = 0 AND number > " + lastBlockNumber + " AND number <= " + max + "\n\
                                                                                 ORDER BY number"));
@@ -175,6 +175,9 @@ function Neo4jService(duniterServer, neo4jHost, neo4jPort) {
 
                         // Valid certification time
                         const sigValidity = duniterServer.conf.sigValidity;
+                        const stepMax = duniterServer.conf.stepMax;
+                        const membersCount = blocks[i]['membersCount']
+                        const dSen = Math.ceil(Math.pow(membersCount, 1 / stepMax));
 
                         for(const certificate of certifications) {
 
@@ -188,6 +191,52 @@ function Neo4jService(duniterServer, neo4jHost, neo4jPort) {
                                     to: medianTime + sigValidity
                                 }
                             }); 
+
+                            // Pre-Compute Sentries
+                            // Check if issuer and/or receiver become sentry
+
+                            for(const pubkey of [certificate.split(":")[0], certificate.split(":")[1]]) {
+
+                                console.log("[RefreshWot] Check Sentry with dSen = " + dSen + " for pubkey " + pubkey);
+
+                                 yield tx.run({
+                                text: "MATCH (idty:Idty {pubkey:{pubkey}}) -[c:CERTIFY]-> ()\n\
+                                        WHERE c.to >= {from}\n\
+                                        WITH idty, count(c) as issuedCount\n\
+                                        MATCH (idty) <-[c:CERTIFY]- ()\n\
+                                        WHERE c.to >= {from}\n\
+                                        WITH idty, count(c) as certCount, issuedCount\n\
+                                        WHERE certCount >= {dSen} AND issuedCount >= {dSen}\n\
+                                        MERGE (idty) -[s:STATE {to:{to}}]-> (:SENTRY)\n\
+                                        ON CREATE SET s.from = {from}",
+                                    parameters: {
+                                        dSen: dSen,
+                                        pubkey: pubkey,
+                                        from: medianTime,
+                                        to:maxlong
+                                    }
+                                });
+                            }
+
+                            // Check if current sentries are still sentries
+                            yield tx.run({
+                                text: "MATCH (i:Idty) -[s:STATE]-> (:SENTRY)\n\
+                                WHERE s.to = {to}\n\
+                                WITH i, s\n\
+                                MATCH (i) -[c:CERTIFY]-> ()\n\
+                                WHERE c.to >= {from}\n\
+                                WITH i, s, count(c) as issuedCount\n\
+                                MATCH (i) <-[c:CERTIFY]- ()\n\
+                                WHERE c.to >= {from}\n\
+                                WITH i, s, issuedCount, count(c) as certCount\n\
+                                WHERE NOT certCount >= {dSen} OR NOT issuedCount >= {dSen}\n\
+                                SET s.to = {from}",
+                            parameters: {
+                                dSen: dSen,
+                                from: medianTime,
+                                to: maxlong
+                                }
+                            });
 
                         }
 
