@@ -12,3 +12,12 @@ MATCH (i:Idty) -[s:STATE]-> (:JOINER)
 WHERE s.from < date AND s.to > date
 WITH apoc.date.format(s.from, 's') as joining_date, i
 RETURN i.uid, joining_date
+
+* Get current valid certifications for a member
+
+MATCH (r:Root) <-[:NEXT]- (b)
+WITH b.medianTime as medianTime
+MATCH (n:Idty {uid:"cgeek"}) -[c:CERTIFY]-> (p) 
+WHERE c.to > medianTime
+WITH p, c, apoc.date.format(c.from, 's') as received, apoc.date.format(c.written, 's') as written, apoc.date.format(c.to,'s') as expiration 
+RETURN p.uid, received, written, expiration

@@ -81,15 +81,25 @@ function Neo4jService(duniterServer, neo4jHost, neo4jPort) {
 
                         } while (nextBlock[0]['previousHash'] != lastBlockHash)
 
-                        // Destroy relationships created after the fork point
+                        // Destroy certification created after the fork point
                         yield session.run({
-                        text: "MATCH (i:Idty) -[r]-> ()\n\
-                               WHERE r.from > {medianTime}\n\
-                               DETACH DELETE r",
+                        text: "MATCH (i:Idty) -[r:CERTIFY]-> ()\n\
+                               WHERE r.written > {medianTime}\n\
+                               DELETE r",
                             parameters: {
                                 medianTime: lastBlock.records[0]._fields[2]
                             }
                         });
+
+                        // Destroy states created after the fork point
+                        yield session.run({
+                        text: "MATCH (i:Idty) -[r:STATE]-> ()\n\
+                               WHERE r.from > {medianTime}\n\
+                               DELETE r",
+                            parameters: {
+                                medianTime: lastBlock.records[0]._fields[2]
+                            }
+                        });                        
 
                         // Destroy nodes created after the fork point
                         yield session.run({
@@ -181,14 +191,21 @@ function Neo4jService(duniterServer, neo4jHost, neo4jPort) {
 
                         for(const certificate of certifications) {
 
+                            // Get date of certificate emission (different from date written)
+                            const issuedBlock = (yield duniterServer.dal.bindexDAL.query("SELECT medianTime FROM block\n\
+                                                                                        WHERE fork = 0 AND number = " + certificate.split(":")[2] ));
+
+                            const issuedTime = issuedBlock[0]['medianTime'];
+
                             yield tx.run({
                             text: "MATCH (idty_from:Idty {pubkey:{pubkey_from}}), (idty_to:Idty {pubkey:{pubkey_to}})\n\
-                            CREATE (idty_from) -[:CERTIFY {from:{from}, to:{to}}]-> (idty_to)",
+                            CREATE (idty_from) -[:CERTIFY {from:{from}, to:{to}, written:{written}}]-> (idty_to)",
                                 parameters: {
                                     pubkey_from: certificate.split(":")[0],
                                     pubkey_to: certificate.split(":")[1],
-                                    from: medianTime,
-                                    to: medianTime + sigValidity
+                                    written: medianTime,
+                                    from: issuedTime,
+                                    to: issuedTime + sigValidity
                                 }
                             }); 
 
@@ -218,7 +235,12 @@ function Neo4jService(duniterServer, neo4jHost, neo4jPort) {
                                 });
                             }
 
-                            // Check if current sentries are still sentries
+                        }
+
+                        // Check if current sentries are still sentries
+                        // Calcul is done at each block
+                        console.log("[RefreshWot] Check if there is expiring sentries");
+
                             yield tx.run({
                                 text: "MATCH (i:Idty) -[s:STATE]-> (:SENTRY)\n\
                                 WHERE s.to = {to}\n\
@@ -237,8 +259,6 @@ function Neo4jService(duniterServer, neo4jHost, neo4jPort) {
                                 to: maxlong
                                 }
                             });
-
-                        }
 
                     }
 
