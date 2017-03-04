@@ -31,7 +31,7 @@ function Neo4jService(duniterServer, neo4jHost, neo4jPort) {
 
                 // Check the last block number in the database
                 const max = (yield duniterServer.dal.bindexDAL.query('SELECT MAX(number) FROM block WHERE fork = 0'))[0]['MAX(number)'];
-                //const max = 10;
+                // const max = 9743;
 
                 if (!lastBlock.records[0]) {
                     // If it's the first run, there's no block
@@ -150,8 +150,9 @@ function Neo4jService(duniterServer, neo4jHost, neo4jPort) {
                             OPTIONAL MATCH (identity) -[previousState:STATE {to:{to}}]-> ()\n\
                             SET previousState.to = {from}\n\
                             WITH identity\n\
-                            CREATE (identity) -[:STATE {from:{from}, to:{to}}]-> (:JOINER)",
+                            CREATE (identity) -[:STATE {from:{from}, to:{to}, number:{number}}]-> (:JOINER)",
                                 parameters: {
+                                    number: blocks[i]['number'],
                                     uid: joiner.split(":")[4],
                                     pubkey: joiner.split(":")[0],
                                     from: medianTime,
@@ -169,10 +170,20 @@ function Neo4jService(duniterServer, neo4jHost, neo4jPort) {
 
                             yield tx.run({
                             text: "MATCH (identity:Idty {pubkey:{pubkey}}) -[previousState:STATE {to:{to}}]-> () \n\
-                            SET previousState.to = {from}\n\
-                            WITH identity\n\
-                            CREATE (identity) -[:STATE {from:{from}, to:{to}}]-> (:EXCLUDED)",
+                            SET previousState.to = {from}",
                                 parameters: {
+                                    pubkey: member,
+                                    from: medianTime,
+                                    to: maxlong
+                                }
+                            }); 
+
+                            // Did in two steps to avoid strange bug (create twe EXCLUDED node for the same member)
+                            yield tx.run({
+                            text: "MATCH (identity:Idty {pubkey:{pubkey}})\n\
+                            CREATE (identity) -[:STATE {from:{from}, to:{to}, number:{number}}]-> (:EXCLUDED)",
+                                parameters: {
+                                    number: blocks[i]['number'],
                                     pubkey: member,
                                     from: medianTime,
                                     to: maxlong
@@ -262,8 +273,34 @@ function Neo4jService(duniterServer, neo4jHost, neo4jPort) {
 
                     }
 
+                console.log("[RefreshWot] Create the current wot view");
+
+                // Pre-compute current valid certifications in order to facilitate queries
+                // Quick and dirty 
+
+                yield tx.run("MATCH () <-[c:CURRENT_CERTIFY]- () DELETE c");
+                yield tx.run("MATCH (i:Idty {sentry:true}) REMOVE i.sentry"); 
+                yield tx.run("MATCH (i:Idty {joiner:true}) REMOVE i.joiner"); 
+
+                yield tx.run("MATCH (i:Idty) -[s:STATE {to:9223372036854775807}]-> (:JOINER)\n\
+                            SET i.joiner = true");
+                yield tx.run("MATCH (i:Idty) -[s:STATE {to:9223372036854775807}]-> (:SENTRY)\n\
+                            SET i.sentry = true");
+
+
+                yield tx.run({text:"MATCH (i:Idty) -[c:CERTIFY]-> (j:Idty)\n\
+                                    WHERE c.to >= {medianTime}\n\
+                                    CREATE (i) <-[:CURRENT_CERTIFY]- (j)",
+                                    parameters: {
+                                        medianTime: medianTime
+
+                                    }
+                                });
+
                 // Update the block tracking (100 last blocks)
                 // Quick and dirty way implemented here
+
+                console.log("[RefreshWot] Refresh the block tracking");
 
                 // Remove Blocks Tracking
                 yield tx.run({text:"MATCH (block:Block)\n\
@@ -304,8 +341,6 @@ function Neo4jService(duniterServer, neo4jHost, neo4jPort) {
                                         }
                                     });
                 }
-            
-
 
                 yield tx.commit();
                 console.log("[Refresh Wot] Commit Changes")

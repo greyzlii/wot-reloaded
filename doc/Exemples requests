@@ -21,3 +21,60 @@ MATCH (n:Idty {uid:"cgeek"}) -[c:CERTIFY]-> (p)
 WHERE c.to > medianTime
 WITH p, c, apoc.date.format(c.from, 's') as received, apoc.date.format(c.written, 's') as written, apoc.date.format(c.to,'s') as expiration 
 RETURN p.uid, received, written, expiration
+
+
+
+* Get average path length at a certain date
+
+WITH apoc.date.parse('2017/02/10 00-00-00','s', 'yyyy/MM/dd HH-mm-ss') as currentdate
+
+MATCH (i:Idty) -[s:STATE]-> (:JOINER)
+WHERE s.to >= currentdate AND s.from <= currentdate
+WITH collect(i) as members, currentdate
+
+MATCH (sent:Idty) -[s:STATE]-> (:SENTRY)
+WHERE s.to >= currentdate AND s.from <= currentdate
+WITH members, collect(sent) as sentries, currentdate
+
+MATCH (i:Idty) -[c:CERTIFY]-> (j:Idty)
+WHERE c.to >= currentdate AND c.from <= currentdate
+CREATE (i) -[:CERT_TEMP]-> (j)
+WITH members, sentries, currentdate
+
+UNWIND members as member
+UNWIND sentries as sent
+MATCH p=ShortestPath((member) <-[:CERT_TEMP*]- (sent))
+WITH 1.0 * SUM(length(p)) / count(p) as avg_path_length
+RETURN avg_path_length
+
+* Same thing, both slow !!
+
+WITH apoc.date.parse('2017/02/10 00-00-00','s', 'yyyy/MM/dd HH-mm-ss') as currentdate
+
+MATCH (i:Idty) -[s:STATE]-> (:JOINER)
+WHERE s.to >= currentdate AND s.from <= currentdate
+WITH collect(i) as members, currentdate
+
+MATCH (sent:Idty) -[s:STATE]-> (:SENTRY)
+WHERE s.to >= currentdate AND s.from <= currentdate
+WITH members, collect(sent) as sentries, currentdate
+
+MATCH (i:Idty) -[c:CERTIFY]-> (j:Idty)
+WHERE c.to >= currentdate AND c.from <= currentdate
+SET c.currentdate = currentdate
+WITH members, sentries, currentdate
+
+UNWIND members as member
+UNWIND sentries as sent
+MATCH p=ShortestPath((member) <-[:CERTIFY* ]- (sent))
+WHERE ALL (x IN RELATIONSHIPS(p) WHERE x.currentdate = currentdate)
+WITH member, 1.0 * SUM(length(p)) / count(p) as avg_path_length, currentdate
+
+RETURN member.uid, avg_path_length
+
+
+* Excluded Members
+
+MATCH (n) -[s:STATE]-> (j:EXCLUDED) WHERE s.to = 9223372036854775807
+RETURN n.uid, labels(j), apoc.date.format(s.from, 's') as date
+ORDER BY s.from DESC
