@@ -60,7 +60,7 @@ function Neo4jService(duniterServer, neo4jHost, neo4jPort) {
                 }
             }
 
-            return identityCurrentStatus;
+            return [identityCurrentStatus];
 
             } catch (e) {
                 console.log(e);
@@ -70,6 +70,86 @@ function Neo4jService(duniterServer, neo4jHost, neo4jPort) {
             }
             return []
         });
+
+    // Get all activity for a scpecified member from the start
+    this.getIdentityHistory = (uid) => co(function*() {
+
+        const session = that.db.session();
+        try {
+
+            var identityHistory = {};
+            identityHistory['uid'] = uid;
+            identityHistory['status'] = [];
+            identityHistory['issuedCertifications'] = [];
+            identityHistory['receivedCertifications'] = []
+
+            // Get all status
+            var result = yield session.run({text:
+                "MATCH (n:Idty {uid:{uid}}) -[s:STATE]-> (j)\n\
+                RETURN s.from as date, s.to as expiration, labels(j) as state\n\
+                ORDER BY s.from DESC",
+                   parameters: {
+                    uid: uid
+                }});
+
+            for(const r of result.records) {
+
+                identityHistory['status'].add({
+                    date:  r._fields[0],
+                    expiration:  r._fields[1],
+                    status:  r._fields[2][0]
+                })
+            }
+
+            // Get all issued certifications
+            result = yield session.run({text:
+                "MATCH (n:Idty {uid:{uid}}) -[c:CERTIFY]-> (j)\n\
+                RETURN c.from as date, c.to as expiration, c.written as written, j.uid\n\
+                ORDER BY c.from DESC",
+                   parameters: {
+                    uid: uid
+                }});            
+
+            for(const r of result.records) {
+
+                identityHistory['issuedCertifications'].add({
+                    date:  r._fields[0],
+                    expiration:  r._fields[1],
+                    written:  r._fields[2],
+                    to: r._fields[3]
+                })
+            }
+
+            // Get all received certifications
+            result = yield session.run({text:
+                "MATCH (n:Idty {uid:{uid}}) <-[c:CERTIFY]- (j)\n\
+                RETURN c.from as date, c.to as expiration, c.written as written, j.uid\n\
+                ORDER BY c.from DESC",
+                   parameters: {
+                    uid: uid
+                }});            
+
+            for(const r of result.records) {
+
+                identityHistory['receivedCertifications'].add({
+                    date:  r._fields[0],
+                    expiration:  r._fields[1],
+                    written:  r._fields[2],
+                    from: r._fields[3]
+                })
+            }
+
+            return [identityHistory];
+
+            } catch (e) {
+                console.log(e);
+            } finally {
+                // Completed!
+                session.close();
+            }
+            return []
+        });
+
 
     // Import Data from blocks table
     this.refreshWot = () => co(function*() {
