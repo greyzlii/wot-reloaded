@@ -18,6 +18,58 @@ function Neo4jService(duniterServer, neo4jHost, neo4jPort) {
     var lastBlockNumber;
     var lastBlockHash;
 
+    // Get current state of a specified identity
+    this.getIdentityCurrentStatus = (uid) => co(function*() {
+
+        const session = that.db.session();
+        try {
+
+            const maxlong = 9223372036854775807;
+
+            const result = yield session.run({text:
+                "MATCH (n:Idty {uid:{uid}}) -[s:STATE {to:{to}}]-> (j)\n\
+                RETURN s.from as date, labels(j) as state",
+                   parameters: {
+                    uid: uid,
+                    to: maxlong
+                }});
+
+            var identityCurrentStatus = {
+                uid: uid,
+                joiner: {status: false, since:null},
+                sentry: {status:false, since:null},
+                excluded: {status:false, since:null}
+            }
+
+            for(const r of result.records) {
+
+                switch (r._fields[1][0]) {
+                    case "JOINER":
+                        console.log("Detect joiner")
+                        identityCurrentStatus['joiner']['status'] = true
+                        identityCurrentStatus['joiner']['since'] = r._fields[0]
+                        break;
+                    case "SENTRY":
+                        identityCurrentStatus['sentry']['status'] = true
+                        identityCurrentStatus['sentry']['since'] = r._fields[0]
+                        break;
+                    case "EXCLUDED":
+                        identityCurrentStatus['excluded']['status'] = true
+                        identityCurrentStatus['excluded']['since'] = r._fields[0]
+
+                }
+            }
+
+            return identityCurrentStatus;
+
+            } catch (e) {
+                console.log(e);
+            } finally {
+                // Completed!
+                session.close();
+            }
+            return []
+        });
 
     // Import Data from blocks table
     this.refreshWot = () => co(function*() {
