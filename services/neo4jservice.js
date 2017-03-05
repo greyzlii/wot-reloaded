@@ -150,6 +150,71 @@ function Neo4jService(duniterServer, neo4jHost, neo4jPort) {
             return []
         });
 
+        // Get Indicators for a specified users
+          // API to know average path length to xpercent sentries
+        this.getIdentityCurrentStats = (uid) => co(function*() {
+        const session = that.db.session();
+        try {
+
+            const xpercent = duniterServer.conf.xpercent
+            // Get stepmax
+            const stepMax = duniterServer.conf.stepMax
+
+            // Calculate the xpercent number of sentries
+            var result = yield session.run({text:
+                    "MATCH (n {sentry : true} )\n\
+                    WHERE NOT n.uid = {uid}\n\
+                    RETURN ceil({xpercent} * count(n)), count(n)",
+                parameters: {
+                    uid: uid,
+                    xpercent: xpercent
+                }});
+
+            const nbxpercentSentries = result.records[0]._fields[0]
+            const nbSentries = result.records[0]._fields[1]
+
+            // calculate the average path length to reach xpercent sentries
+            result = yield session.run({text:
+                    "MATCH (sentry {sentry : true} )\n\
+                    WHERE NOT sentry.uid = {uid}\n\
+                    MATCH p=ShortestPath((member {uid:{uid}, joiner:true}) <-[:CURRENT_CERTIFY*.. "+ stepMax + "]- (sentry))\n\
+                    WITH p, member, sentry\n\
+                    ORDER BY length(p) LIMIT " + nbxpercentSentries + "\n\
+                    RETURN member.uid, 1.0 * SUM(length(p)) / " + nbxpercentSentries + "\n", 
+                parameters: {
+                    uid: uid
+                }});
+
+           // console.log(result);
+
+            const identityStats = {};
+            identityStats['uid'] = result.records[0]._fields[0]
+            identityStats['avgPathLength'] = result.records[0]._fields[1]
+
+            // Calculte number of reachable sentries at maxStep
+            result = yield session.run({text:
+                    "MATCH p=ShortestPath((member {uid:{uid}, joiner:true}) <-[:CURRENT_CERTIFY*.."+ stepMax + "]-(sentry {sentry : true}))\n\
+                    WHERE length(p) <= {stepMax} AND member <> sentry\n\
+                    RETURN 100.0 * count(sentry) / {nbSentries} AS percent",
+                parameters: {
+                    uid: uid,
+                    stepMax: stepMax,
+                    nbSentries: nbSentries
+                }});
+
+            identityStats['pctReachableSentries'] = result.records[0]._fields[0]
+
+            return [identityStats];
+
+            } catch (e) {
+                console.log(e);
+            } finally {
+                // Completed!
+                session.close();
+            }
+        return []
+    });
+
 
     // Import Data from blocks table
     this.refreshWot = () => co(function*() {
@@ -499,7 +564,7 @@ function Neo4jService(duniterServer, neo4jHost, neo4jPort) {
 
                 yield that.refreshWot();
                 // Update the database every 60 seconds
-                setInterval(that.refreshWot, 10 * 1000);
+                setInterval(that.refreshWot, 3 * 60 * 1000);
                 
 
                 that.db.onError = (error) => {
