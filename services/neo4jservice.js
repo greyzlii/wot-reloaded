@@ -19,48 +19,99 @@ function Neo4jService(duniterServer, neo4jHost, neo4jPort) {
     var lastBlockHash;
 
     // Get current state of a specified identity
-    this.getIdentityCurrentStatus = (uid) => co(function*() {
+    this.getIdentityStatus = (uid,date) => co(function*() {
 
         const session = that.db.session();
         try {
 
-            const maxlong = 9223372036854775807;
+            if (date == 0) {
+                var result = yield session.run(
+                    "MATCH (:Root) <-[:NEXT]- (b:Block)\n\
+                    RETURN b.medianTime");
+                date = result.records[0]._fields[0]
+            }
 
-            const result = yield session.run({text:
-                "MATCH (n:Idty {uid:{uid}}) -[s:STATE {to:{to}}]-> (j)\n\
+            var identityStatus = {
+                uid: uid,
+                date: date,
+                status: {
+                    joiner: {status: false, since:null},
+                    sentry: {status:false, since:null},
+                    excluded: {status:false, since:null}
+                },
+                certifications: {
+                    issuedCertifications: [],
+                    receivedCertifications: []
+                }
+            }
+
+
+            result = yield session.run({text:
+                "MATCH (n:Idty {uid:{uid}}) -[s:STATE]-> (j)\n\
+                WHERE s.to >= {date} AND s.from <= {date}\n\
                 RETURN s.from as date, labels(j) as state",
                    parameters: {
                     uid: uid,
-                    to: maxlong
+                    date: date
                 }});
 
-            var identityCurrentStatus = {
-                uid: uid,
-                joiner: {status: false, since:null},
-                sentry: {status:false, since:null},
-                excluded: {status:false, since:null}
-            }
 
             for(const r of result.records) {
 
                 switch (r._fields[1][0]) {
                     case "JOINER":
                         console.log("Detect joiner")
-                        identityCurrentStatus['joiner']['status'] = true
-                        identityCurrentStatus['joiner']['since'] = r._fields[0]
+                        identityStatus['status']['joiner']['status'] = true
+                        identityStatus['status']['joiner']['since'] = r._fields[0]
                         break;
                     case "SENTRY":
-                        identityCurrentStatus['sentry']['status'] = true
-                        identityCurrentStatus['sentry']['since'] = r._fields[0]
+                        identityStatus['status']['sentry']['status'] = true
+                        identityStatus['status']['sentry']['since'] = r._fields[0]
                         break;
                     case "EXCLUDED":
-                        identityCurrentStatus['excluded']['status'] = true
-                        identityCurrentStatus['excluded']['since'] = r._fields[0]
+                        identityStatus['status']['excluded']['status'] = true
+                        identityStatus['status']['excluded']['since'] = r._fields[0]
 
                 }
             }
 
-            return [identityCurrentStatus];
+            result = yield session.run({text:
+                "MATCH (n:Idty {uid:{uid}}) -[s:CERTIFY]-> (j)\n\
+                WHERE s.to >= {date} AND s.from <= {date}\n\
+                RETURN s.from as date, s.to, s.written as written, j.uid",
+                   parameters: {
+                    uid: uid,
+                    date: date
+                }});
+
+            for(const r of result.records) {
+                    identityStatus['certifications']['issuedCertifications'].add({
+                    date:  r._fields[0],
+                    expiration:  r._fields[1],
+                    written:  r._fields[2],
+                    to: r._fields[3]
+                })
+            }
+
+            result = yield session.run({text:
+                "MATCH (n:Idty {uid:{uid}}) <-[s:CERTIFY]- (j)\n\
+                WHERE s.to >= {date} AND s.from <= {date}\n\
+                RETURN s.from as date, s.to, s.written as written, j.uid",
+                   parameters: {
+                    uid: uid,
+                    date: date
+                }});
+
+            for(const r of result.records) {
+                    identityStatus['certifications']['receivedCertifications'].add({
+                    date:  r._fields[0],
+                    expiration:  r._fields[1],
+                    written:  r._fields[2],
+                    to: r._fields[3]
+                })
+            }
+
+            return [identityStatus];
 
             } catch (e) {
                 console.log(e);
