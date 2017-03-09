@@ -201,8 +201,9 @@ function Neo4jService(duniterServer, neo4jHost, neo4jPort) {
             return []
         });
 
+
         // Get Indicators for a specified users
-          // API to know average path length to xpercent sentries
+        // API to know average path length to xpercent sentries
         this.getIdentityCurrentStats = (uid) => co(function*() {
         const session = that.db.session();
         try {
@@ -265,6 +266,8 @@ function Neo4jService(duniterServer, neo4jHost, neo4jPort) {
             }
         return []
     });
+
+    
 
 
     // Import Data from blocks table
