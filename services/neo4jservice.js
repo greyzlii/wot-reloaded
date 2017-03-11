@@ -18,6 +18,136 @@ function Neo4jService(duniterServer, neo4jHost, neo4jPort) {
     var lastBlockNumber;
     var lastBlockHash;
 
+    // Get Wot Stats
+    this.getWotStats = (uid,date) => co(function*()  {
+        const session = that.db.session();
+
+        try {
+
+
+            if (date == 0) {
+            // Take the time of the last block
+                var result = yield session.run(
+                    "MATCH (:Root) <-[:NEXT]- (b:Block)\n\
+                    RETURN b.medianTime");
+                date = result.records[0]._fields[0]
+            }
+
+
+            // Get max diameter
+            var result = yield session.run({text:
+                "MATCH p=ShortestPath((n:Idty) -[s:CURRENT_CERTIFY*]-> (j:Idty))\n\
+                RETURN length(p), [x in nodes(p)| x.uid]\n\
+                ORDER BY length(p) DESC LIMIT 10",
+                   parameters: {
+                    date: date
+            }});
+
+            const wotStats = {}
+            wotStats['maxDiameter'] = {maxDiameter: result.records[0]._fields[0].getLowBits(), paths:[]}
+
+            for(const r of result.records) {
+                wotStats['maxDiameter']['paths'].add(r._fields[1])
+            } 
+
+            return [wotStats]
+
+        } catch (e) {
+            console.log(e);
+        } finally {
+            // Completed!
+            session.close();
+        }
+        return []     
+
+    });
+
+
+    // Get Events (new joiners, sentries, excluded and certifications)
+    this.getWotEvents = (uid,fromDate,toDate,limit) => co(function*()  {
+
+        const sigValidity = duniterServer.conf.sigValidity;
+        const session = that.db.session();
+        
+        try {  
+
+            if (toDate == 0) {
+            // Take the time of the last block
+                var result = yield session.run(
+                    "MATCH (:Root) <-[:NEXT]- (b:Block)\n\
+                    RETURN b.medianTime");
+                toDate = result.records[0]._fields[0]
+            }
+
+            if (fromDate == 0) { fromDate = toDate - sigValidity };
+
+            if (fromDate > toDate) {
+            // There is an error in the request
+                return []
+            }
+
+            // Get status events
+            result = yield session.run({text:
+                "MATCH (n:Idty) -[s:STATE]-> (j)\n\
+                WHERE s.from >= {fromDate} AND s.from <= {toDate}\n\
+                RETURN n.uid as uid, s.from as fromDate, s.to as toDate, labels(j) as state\n\
+                ORDER BY s.from DESC LIMIT {limit}",
+                   parameters: {
+                    fromDate: fromDate,
+                    toDate: toDate,
+                    limit: limit
+            }});
+
+            const wotEvents = {} 
+            wotEvents['membersEvents'] = []
+
+            for(const r of result.records) {
+                wotEvents['membersEvents'].add({
+                    uid:r._fields[0],
+                    event:r._fields[3][0],
+                    from:r._fields[1],
+                    to:r._fields[2]
+                })
+            } 
+
+            // Get certifications
+            result = yield session.run({text:
+                "MATCH (n:Idty) -[s:CERTIFY]-> (j:Idty)\n\
+                WHERE s.from >= {fromDate} AND s.from <= {toDate}\n\
+                RETURN n.uid as uid, s.from as fromDate, s.to as toDate, j.uid, s.number, s.written\n\
+                ORDER BY s.from DESC LIMIT {limit}",
+                   parameters: {
+                    fromDate: fromDate,
+                    toDate: toDate,
+                    limit: limit
+            }});
+
+            wotEvents['certifications'] = []
+            for(const r of result.records) {
+                wotEvents['certifications'].add({
+                    from:r._fields[0],
+                    to:r._fields[3],
+                    date:r._fields[1],
+                    expiration:r._fields[2],
+                    writtenTime:r._fields[5],
+                    writtenBlock:r._fields[4]
+                })
+            } 
+
+
+
+        return [wotEvents];
+
+        } catch (e) {
+            console.log(e);
+        } finally {
+            // Completed!
+            session.close();
+        }
+        return []      
+
+    });
+
     // Get current state of a specified identity
     this.getIdentityStatus = (uid,date) => co(function*() {
 
@@ -283,6 +413,8 @@ function Neo4jService(duniterServer, neo4jHost, neo4jPort) {
                 // Check the last block number in the database
                 const max = (yield duniterServer.dal.bindexDAL.query('SELECT MAX(number) FROM block WHERE fork = 0'))[0]['MAX(number)'];
                 // const max = 9743;
+
+                console.log(lastBlock + " " + max)
 
                 if (!lastBlock.records[0]) {
                     // If it's the first run, there's no block
