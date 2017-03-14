@@ -18,6 +18,84 @@ function Neo4jService(duniterServer, neo4jHost, neo4jPort) {
     var lastBlockNumber;
     var lastBlockHash;
 
+    // Get Events near a member
+    this.getCloseEvents = (uid,stepsMax,limitDate) => co(function*()  {
+
+        const session = that.db.session();
+        try {
+
+            var date = 0;
+            const sigValidity = duniterServer.conf.sigValidity;
+            if (limitDate == 0) {
+            // Take the time of the last block
+                var result = yield session.run(
+                    "MATCH (:Root) <-[:NEXT]- (b:Block)\n\
+                    RETURN b.medianTime");
+                date = result.records[0]._fields[0]
+                limitDate = date - sigValidity;
+            }
+
+
+
+            result = yield session.run({text:
+                "MATCH (i:Idty {uid:{uid}})\n\
+                CALL apoc.path.expandConfig(i,{minLevel:1,maxLevel:" + stepsMax + ",relationshipFilter:'CURRENT_CERTIFY',labelFilter:'+Idty',uniqueness:'NODE_GLOBAL',bfs:true}) yield path as pp\n\
+                WITH collect(nodes(pp)[-1]) as idties\n\
+                UNWIND idties as idty\n\
+                MATCH (idty) -[k:CERTIFY]-> (j) WHERE k.from >= {date}\n\
+                RETURN idty.uid, k.from,j.uid",
+                   parameters: {
+                    uid: uid,
+                    date: limitDate
+            }});
+
+            var closeEvents = {}
+
+            closeEvents['membersEvents'] = []
+            closeEvents['certifications'] = []
+
+            for(const r of result.records) {
+                closeEvents['certifications'].add({
+                    from: r._fields[0],
+                    to: r._fields[2],
+                    date: r._fields[1]
+                })
+            } 
+
+            result = yield session.run({text:
+                "MATCH (i:Idty {uid:{uid}})\n\
+                CALL apoc.path.expandConfig(i,{minLevel:1,maxLevel:" + stepsMax + ",relationshipFilter:'CURRENT_CERTIFY',labelFilter:'+Idty',uniqueness:'NODE_GLOBAL',bfs:true}) yield path as pp\n\
+                WITH collect(nodes(pp)[-1]) as idties\n\
+                UNWIND idties as idty\n\
+                MATCH (idty) -[k:STATE]- (j) WHERE k.from >= {date}\n\
+                RETURN idty.uid, labels(j)[0]",
+                   parameters: {
+                    uid: uid,
+                    date: limitDate
+            }});
+
+
+            for(const r of result.records) {
+                closeEvents['membersEvents'].add({
+                    uid: r._fields[0],
+                    event: r._fields[1]
+                })
+            } 
+
+
+
+            return [closeEvents]
+        
+        } catch (e) {
+            console.log(e);
+        } finally {
+            // Completed!
+            session.close();
+        }
+        return []     
+
+    });        
+
     // Get Wot Stats
     this.getWotStats = (uid,date) => co(function*()  {
         const session = that.db.session();
@@ -414,7 +492,7 @@ function Neo4jService(duniterServer, neo4jHost, neo4jPort) {
                 const max = (yield duniterServer.dal.bindexDAL.query('SELECT MAX(number) FROM block WHERE fork = 0'))[0]['MAX(number)'];
                 // const max = 9743;
 
-                console.log(lastBlock + " " + max)
+                //console.log(lastBlock + " " + max)
 
                 if (!lastBlock.records[0]) {
                     // If it's the first run, there's no block
@@ -460,7 +538,7 @@ function Neo4jService(duniterServer, neo4jHost, neo4jPort) {
                                                                                  WHERE fork = 0 AND number = " + nextBlockNumber ));  
                             i ++;
 
-                            //console.log("lastBlockNumber : " + lastBlockNumber + ", lastBlockHash : " + lastBlockHash + ", nextBlockPreviousHash : " + nextBlock[0]['previousHash'])
+                            console.log("[RefreshWot] lastBlockNumber : " + lastBlockNumber + ", lastBlockHash : " + lastBlockHash + ", nextBlockPreviousHash : " + nextBlock[0]['previousHash'])
 
                         } while (nextBlock[0]['previousHash'] != lastBlockHash)
 
